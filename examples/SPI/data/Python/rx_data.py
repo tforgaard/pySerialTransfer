@@ -1,5 +1,14 @@
 from time import sleep
-from pySerialTransfer import pySerialTransfer as txfer
+from pySerialTransfer import pySPITransfer as txfer
+
+from periphery import GPIO
+
+
+print("opening gpio")
+gpio_data_ready_in = GPIO("/dev/gpiochip0", 7, "in", edge="rising") # pin 22
+
+
+gpio_debug_pin = GPIO("/dev/gpiochip0", 38, "out") # pin 38 or 40
 
 
 class struct(object):
@@ -9,31 +18,36 @@ class struct(object):
 
 arr = ''
 
+transmit = False
+
 
 if __name__ == '__main__':
     try:
         testStruct = struct
-        link = txfer.SPITransfer('/dev/spidev0.0', 0, 100_000)
+        link = txfer.SPITransfer(port='/dev/spidev0.0', spi_mode=0, baud=20000000, debug=False)
         
         link.open()
         sleep(5)
+        num_rec = 0
     
         while True:
-            if link.available():
+
+            if gpio_data_ready_in.read() and not transmit:
+                transmit=True
+            
+            available, transmit = link.available(transmit)
+            if available:
                 recSize = 0
-                
-                testStruct.z = link.rx_obj(obj_type='c', start_pos=recSize)
-                recSize += txfer.STRUCT_FORMAT_LENGTHS['c']
-                
-                testStruct.y = link.rx_obj(obj_type='f', start_pos=recSize)
-                recSize += txfer.STRUCT_FORMAT_LENGTHS['f']
-                
-                arr = link.rx_obj(obj_type=str,
-                                  start_pos=recSize,
-                                  obj_byte_size=5)
+                gpio_debug_pin.write(True)
+                # simple_arr = link.rxBuff[0:248]
+                simple_arr = link.rx_obj(obj_type=list,start_pos=recSize,list_format='B',obj_byte_size=248)
+
                 recSize += len(arr)
                 
-                print('{}{} | {}'.format(testStruct.z, testStruct.y, arr))
+                print("simple arr:", simple_arr)
+                sleep(0.1)
+                num_rec += 1
+                gpio_debug_pin.write(False)
                 
             elif link.status < 0:
                 if link.status == txfer.CRC_ERROR:
@@ -45,7 +59,9 @@ if __name__ == '__main__':
                 else:
                     print('ERROR: {}'.format(link.status))
             else:
-                sleep(0.001) # sleep 1ms
+                # print("sleeping")
+                pass
+                # sleep(0.01) # sleep 10ms
                 
         
     except KeyboardInterrupt:

@@ -4,7 +4,7 @@ from pySerialTransfer import pySPITransfer as txfer
 
 if __name__ == '__main__':
     try:
-        link = txfer.SPITransfer(port='/dev/spidev0.0', spi_mode=0, baud=20000000, debug=False)
+        link = txfer.SPITransfer(port='/dev/spidev0.0', spi_mode=0, baud=20000000, debug=True)
         
         link.open()
         sleep(5)

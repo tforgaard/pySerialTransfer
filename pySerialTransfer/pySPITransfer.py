@@ -133,7 +133,7 @@ def constrain(val, min_, max_):
 
 
 class SPITransfer(object):
-    def __init__(self, port, baud=115200, spi_mode=0, data_ready_pin_id=7, debug_pin_id=38, debug=True, byte_format=BYTE_FORMATS['little-endian'], spi_bits_per_word=8, spi_extra_flags=0, timeout=0.05):
+    def __init__(self, port, baud=115200, spi_mode=0, data_ready_pin_id=7, debug_pin_id=13, debug=True, byte_format=BYTE_FORMATS['little-endian'], spi_bits_per_word=8, spi_extra_flags=0, timeout=0.05):
         '''
         Description:
         ------------
@@ -164,6 +164,8 @@ class SPITransfer(object):
 
         self.state = find_start_byte
 
+        self.buffer_index = 0
+        self.buffer = [' '] * 260
 
         self.data_ready_pin = GPIO("/dev/gpiochip0", data_ready_pin_id, "in")
         if self.debug:
@@ -513,7 +515,6 @@ class SPITransfer(object):
 
         testIndex = self.recOverheadByte
         delta = 0
-
         if testIndex <= MAX_PACKET_SIZE:
             while self.rxBuff[testIndex]:
                 delta = self.rxBuff[testIndex]
@@ -536,32 +537,37 @@ class SPITransfer(object):
         if self.data_ready_pin.read() and not self.transmit:
                 self.transmit=True # Slave is ready to transmit
                 if self.debug:
+                    
                     self.debug_pin.write(True)
                 self.start_transmission_time = time()
+                self.buffer = self.connection.transfer([0x00]*260)
 
         if self.open() and self.transmit:
 
-            # if transmit and not self.transmit:
-            #     self.transmit = True
                 
-            if self.start_transmission_time is not None and time() - self.start_transmission_time > 1: # 100ms
+            if self.buffer_index >= len(self.buffer) or (self.start_transmission_time is not None and time() - self.start_transmission_time > 1): # 100ms
+
                 print("TIMEOUT")
                 self.transmit = False
                 if self.debug:
                     self.debug_pin.write(False)
                 self.state = find_start_byte
+                self.buffer_index = 0
                 return 0
 
-            tmp = self.connection.transfer([0x00])
+            # tmp = self.connection.transfer([0x00])
             # tmp =  int.from_bytes(self.connection.transfer([0x00]),
                          #                byteorder='big')
-            recChar = tmp[0]
+            print(self.buffer)
+            recChar = self.buffer[self.buffer_index]# tmp[0]
+            self.buffer_index += 1
 
             if self.debug:
                 # print("start trans time: ", self.start_transmission_time, end=" ")
                 # print("transmit: ", transmit, end= " ")
-                print("state: ", self.state, end=" ")
-                print("recChar: ", tmp, end="\n")
+                # print("state: ", self.state, end=" ")
+                # print("recChar: ", recChar, end="\n")
+                pass
             
 
             if self.state == find_start_byte:
@@ -591,6 +597,7 @@ class SPITransfer(object):
                     self.bytesRead = 0
                     self.state = find_start_byte
                     self.transmit = False
+                    self.buffer_index = 0
                     if self.debug:
                         self.debug_pin.write(False)
                     self.status = PAYLOAD_ERROR
@@ -598,7 +605,8 @@ class SPITransfer(object):
 
             elif self.state == find_payload:
                 if self.debug:
-                    print("bytes to receive: ", self.bytesToRec, end=" ")
+                    pass 
+                    # print("bytes to receive: ", self.bytesToRec, end=" ")
                 if self.payIndex < self.bytesToRec:
                     self.rxBuff[self.payIndex] = recChar
                     self.payIndex += 1
@@ -607,13 +615,15 @@ class SPITransfer(object):
                     # if there is a timeout from the OS
                     if self.payIndex != self.bytesToRec:
                         #pass
-                        moreBytes = list(self.connection.transfer([0x00]*(1 + self.bytesToRec - self.payIndex)))
-                        print("moreBytes:", moreBytes)
-                        moreBytes = moreBytes[:1] + moreBytes[2:]
+                        moreBytes = list(self.buffer[self.buffer_index:self.buffer_index+(self.bytesToRec - self.payIndex)])
+                        #moreBytes = list(self.connection.transfer([0x00]*(1 + self.bytesToRec - self.payIndex)))
+                        # print("moreBytes:", moreBytes)
+                        # moreBytes = moreBytes[:1] + moreBytes[2:]
                         
                         #sleep(0.1)
                         ## moreBytes = list(self.connection.read(self.bytesToRec - self.payIndex))
                         nextIndex = self.payIndex + len(moreBytes)
+                        self.buffer_index += len(moreBytes)
 
                         self.rxBuff[self.payIndex:nextIndex] = moreBytes
                         self.payIndex = nextIndex 
@@ -636,6 +646,7 @@ class SPITransfer(object):
                     self.bytesRead = 0
                     self.state = find_start_byte
                     self.transmit = False
+                    self.buffer_index = 0
                     if self.debug:
                         self.debug_pin.write(False)
                     self.status = CRC_ERROR
@@ -644,6 +655,7 @@ class SPITransfer(object):
             elif self.state == find_end_byte:
                 self.state = find_start_byte
                 self.transmit = False
+                self.buffer_index = 0
                 if self.debug:
                     self.debug_pin.write(False)
 
@@ -665,6 +677,7 @@ class SPITransfer(object):
                 if self.debug:
                     self.debug_pin.write(False)
                 self.state = find_start_byte
+                self.buffer_index = 0
                 return self.bytesRead
             
             # else:

@@ -3,7 +3,8 @@ import json
 import struct
 # import serial
 # import serial.tools.list_ports
-from periphery import SPI, SPIError
+from periphery import SPI, SPIError, GPIO
+from time import sleep
 from array import array
 from .CRC import CRC
 
@@ -527,87 +528,95 @@ class SPITransfer(object):
         '''
 
         if self.open():
+
+            [recChar] = int.from_bytes(self.connection.transfer([0x00]),
+                                        byteorder='big')
+            # recChar = recCharList[0]
             # TODO: make slave always send data 0x0, and remove in_waiting stuff
-            if self.connection.in_waiting:
-                while self.connection.in_waiting:
-                    recChar = int.from_bytes(self.connection.read(),
-                                             byteorder='big')
+            #if self.connection.in_waiting:
+                # while self.connection.in_waiting:
 
-                    if self.state == find_start_byte:
-                        if recChar == START_BYTE:
-                            self.state = find_id_byte
-                    
-                    elif self.state == find_id_byte:
-                        self.idByte = recChar
-                        self.state = find_overhead_byte
+            if self.state == find_start_byte:
+                if recChar == START_BYTE:
+                    self.state = find_id_byte
+                else:
+                    self.bytesRead = 0
+                    self.status = NO_DATA
+                    return self.bytesRead
+            
+            elif self.state == find_id_byte:
+                self.idByte = recChar
+                self.state = find_overhead_byte
 
-                    elif self.state == find_overhead_byte:
-                        self.recOverheadByte = recChar
-                        self.state = find_payload_len
+            elif self.state == find_overhead_byte:
+                self.recOverheadByte = recChar
+                self.state = find_payload_len
 
-                    elif self.state == find_payload_len:
-                        if recChar <= MAX_PACKET_SIZE:
-                            self.bytesToRec = recChar
-                            self.payIndex = 0
-                            self.state = find_payload
-                        else:
-                            self.bytesRead = 0
-                            self.state = find_start_byte
-                            self.status = PAYLOAD_ERROR
-                            return self.bytesRead
+            elif self.state == find_payload_len:
+                if recChar <= MAX_PACKET_SIZE:
+                    self.bytesToRec = recChar
+                    self.payIndex = 0
+                    self.state = find_payload
+                else:
+                    self.bytesRead = 0
+                    self.state = find_start_byte
+                    self.status = PAYLOAD_ERROR
+                    return self.bytesRead
 
-                    elif self.state == find_payload:
-                        if self.payIndex < self.bytesToRec:
-                            self.rxBuff[self.payIndex] = recChar
-                            self.payIndex += 1
+            elif self.state == find_payload:
+                if self.payIndex < self.bytesToRec:
+                    self.rxBuff[self.payIndex] = recChar
+                    self.payIndex += 1
 
-                            # Try to receive as many more bytes as we can, but we might not get all of them
-                            # if there is a timeout from the OS
-                            if self.payIndex != self.bytesToRec:
-                                moreBytes = list(self.connection.read(self.bytesToRec - self.payIndex))
-                                nextIndex = self.payIndex + len(moreBytes)
+                    # Try to receive as many more bytes as we can, but we might not get all of them
+                    # if there is a timeout from the OS
+                    if self.payIndex != self.bytesToRec:
+                        moreBytes = list(self.connection.transfer([0x00]*(self.bytesToRec - self.payIndex)))
+                        # moreBytes = list(self.connection.read(self.bytesToRec - self.payIndex))
+                        nextIndex = self.payIndex + len(moreBytes)
 
-                                self.rxBuff[self.payIndex:nextIndex] = moreBytes
-                                self.payIndex = nextIndex
+                        self.rxBuff[self.payIndex:nextIndex] = moreBytes
+                        self.payIndex = nextIndex
 
-                            if self.payIndex == self.bytesToRec:
-                                self.state = find_crc
+                    if self.payIndex == self.bytesToRec:
+                        self.state = find_crc
 
-                    elif self.state == find_crc:
-                        found_checksum = self.crc.calculate(
-                            self.rxBuff, self.bytesToRec)
+            elif self.state == find_crc:
+                found_checksum = self.crc.calculate(
+                    self.rxBuff, self.bytesToRec)
 
-                        if found_checksum == recChar:
-                            self.state = find_end_byte
-                        else:
-                            self.bytesRead = 0
-                            self.state = find_start_byte
-                            self.status = CRC_ERROR
-                            return self.bytesRead
+                if found_checksum == recChar:
+                    self.state = find_end_byte
+                else:
+                    self.bytesRead = 0
+                    self.state = find_start_byte
+                    self.status = CRC_ERROR
+                    return self.bytesRead
 
-                    elif self.state == find_end_byte:
-                        self.state = find_start_byte
+            elif self.state == find_end_byte:
+                self.state = find_start_byte
 
-                        if recChar == STOP_BYTE:
-                            self.unpack_packet(self.bytesToRec)
-                            self.bytesRead = self.bytesToRec
-                            self.status = NEW_DATA
-                            return self.bytesRead
+                if recChar == STOP_BYTE:
+                    self.unpack_packet(self.bytesToRec)
+                    self.bytesRead = self.bytesToRec
+                    self.status = NEW_DATA
+                    return self.bytesRead
 
-                        self.bytesRead = 0
-                        self.status = STOP_BYTE_ERROR
-                        return self.bytesRead
-
-                    else:
-                        print('ERROR: Undefined state: {}'.format(self.state))
-
-                        self.bytesRead = 0
-                        self.state = find_start_byte
-                        return self.bytesRead
-            else:
                 self.bytesRead = 0
-                self.status = NO_DATA
+                self.status = STOP_BYTE_ERROR
                 return self.bytesRead
+
+            else:
+                print('ERROR: Undefined state: {}'.format(self.state))
+
+                self.bytesRead = 0
+                self.state = find_start_byte
+                return self.bytesRead
+            
+            # else:
+            #     self.bytesRead = 0
+            #     self.status = NO_DATA
+            #     return self.bytesRead
 
         self.bytesRead = 0
         self.status = CONTINUE

@@ -133,7 +133,7 @@ def constrain(val, min_, max_):
 
 
 class SPITransfer(object):
-    def __init__(self, port, baud=115200, spi_mode=0, debug=True, byte_format=BYTE_FORMATS['little-endian'], spi_bits_per_word=8, spi_extra_flags=0, timeout=0.05):
+    def __init__(self, port, baud=115200, spi_mode=0, data_ready_pin_id=7, debug_pin_id=38, debug=True, byte_format=BYTE_FORMATS['little-endian'], spi_bits_per_word=8, spi_extra_flags=0, timeout=0.05):
         '''
         Description:
         ------------
@@ -164,6 +164,10 @@ class SPITransfer(object):
 
         self.state = find_start_byte
 
+
+        self.data_ready_pin = GPIO("/dev/gpiochip0", data_ready_pin_id, "in")
+        if self.debug:
+            self.debug_pin = GPIO("/dev/gpiochip0", debug_pin_id, "out")
         self.start_transmission_time = None        
         self.transmit = False
         # if restrict_ports:
@@ -518,7 +522,7 @@ class SPITransfer(object):
 
             self.rxBuff[testIndex] = START_BYTE
 
-    def available(self, transmit):
+    def available(self):
         '''
         Description:
         ------------
@@ -529,19 +533,24 @@ class SPITransfer(object):
                                       packet
         '''
 
-        if self.open() and transmit:
-
-            if transmit and not self.transmit:
-                self.transmit = True
+        if self.data_ready_pin.read() and not self.transmit:
+                self.transmit=True # Slave is ready to transmit
+                if self.debug:
+                    self.debug_pin.write(True)
                 self.start_transmission_time = time()
 
+        if self.open() and self.transmit:
+
+            # if transmit and not self.transmit:
+            #     self.transmit = True
+                
             if self.start_transmission_time is not None and time() - self.start_transmission_time > 1: # 100ms
                 print("TIMEOUT")
-                transmit = False
                 self.transmit = False
-                
+                if self.debug:
+                    self.debug_pin.write(False)
                 self.state = find_start_byte
-                return 0, transmit
+                return 0
 
             tmp = self.connection.transfer([0x00])
             # tmp =  int.from_bytes(self.connection.transfer([0x00]),
@@ -563,7 +572,7 @@ class SPITransfer(object):
                 else:
                     self.bytesRead = 0
                     self.status = NO_DATA
-                    return self.bytesRead, transmit
+                    return self.bytesRead
             
             elif self.state == find_id_byte:
                 self.idByte = recChar
@@ -581,8 +590,11 @@ class SPITransfer(object):
                 else:
                     self.bytesRead = 0
                     self.state = find_start_byte
+                    self.transmit = False
+                    if self.debug:
+                        self.debug_pin.write(False)
                     self.status = PAYLOAD_ERROR
-                    return self.bytesRead, transmit
+                    return self.bytesRead
 
             elif self.state == find_payload:
                 if self.debug:
@@ -623,30 +635,37 @@ class SPITransfer(object):
                 else:
                     self.bytesRead = 0
                     self.state = find_start_byte
+                    self.transmit = False
+                    if self.debug:
+                        self.debug_pin.write(False)
                     self.status = CRC_ERROR
-                    return self.bytesRead, transmit
+                    return self.bytesRead
 
             elif self.state == find_end_byte:
                 self.state = find_start_byte
-                transmit = False
                 self.transmit = False
+                if self.debug:
+                    self.debug_pin.write(False)
 
                 if recChar == STOP_BYTE:
                     self.unpack_packet(self.bytesToRec)
                     self.bytesRead = self.bytesToRec
                     self.status = NEW_DATA
-                    return self.bytesRead, transmit
+                    return self.bytesRead
 
                 self.bytesRead = 0
                 self.status = STOP_BYTE_ERROR
-                return self.bytesRead, transmit
+                return self.bytesRead
 
             else:
                 print('ERROR: Undefined state: {}'.format(self.state))
 
                 self.bytesRead = 0
+                self.transmit = False
+                if self.debug:
+                    self.debug_pin.write(False)
                 self.state = find_start_byte
-                return self.bytesRead, transmit
+                return self.bytesRead
             
             # else:
             #     self.bytesRead = 0
@@ -655,7 +674,7 @@ class SPITransfer(object):
 
         self.bytesRead = 0
         self.status = CONTINUE
-        return self.bytesRead, transmit
+        return self.bytesRead
     
     def tick(self):
         '''
